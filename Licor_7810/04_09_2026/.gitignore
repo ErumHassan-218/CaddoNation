@@ -1,0 +1,11 @@
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+Raw Data/
+*.csv
+!Well16.csv
+!outputs/*.csv
+Excel/*.xlsx
+Excel/*.png
+outputs/*.png
+rdme.txt
