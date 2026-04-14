@@ -19,7 +19,7 @@ For reusable runs across other wells and dates, use the repo-root CLI in [README
 - `well16_report_figures.py`: generates report-ready methane figures for Well16
 - `../../methane_image_matching.py`: repo-level reusable CLI for other wells and dates
 - `requirements.txt`: Python packages used by the workflow
-- `Excel/graph.ipynb`: plotting notebook
+- `Well 16/graph.ipynb`: plotting notebook
 - `outputs/well16_all_image_matches.csv`: all parsed images with match status
 - `outputs/well16_overlap_image_matches.csv`: images inside the corrected methane time window
 - `outputs/well16_peak_photo_summary.csv`: detected methane peaks with the nearest field image

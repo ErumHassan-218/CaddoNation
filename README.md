@@ -7,7 +7,7 @@ This repo root now includes a reusable CLI for matching methane CSV timestamps t
 - For the reusable repo-level workflow, run `python3 methane_image_matching.py ...` from the `Methane_Data` repo root.
 - For the current Well16 defaults only, run `python3 Licor_7810/04_09_2026/well16_image_matching.py`.
 - For report-ready Well16 figures, run `python3 Licor_7810/04_09_2026/well16_report_figures.py`.
-- For interactive review and plots, open `Licor_7810/04_09_2026/Excel/graph.ipynb` and run the cells from top to bottom.
+- For interactive review and plots, open `Licor_7810/04_09_2026/Well 16/graph.ipynb` and run the cells from top to bottom.
 
 ## Generic CLI
 
