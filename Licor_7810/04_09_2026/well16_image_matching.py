@@ -15,6 +15,7 @@ from methane_image_matching import (  # noqa: F401
     PEAK_PROMINENCE_PPM,
     TIMESTAMP_OFFSET_SECONDS,
     build_arg_parser,
+    build_combined_event_report,
     build_image_match_table,
     build_peak_photo_summary,
     build_summary,

@@ -342,12 +342,115 @@ def build_peak_photo_summary(
     return peak_df.sort_values("peak_rank_by_ch4").reset_index(drop=True)
 
 
+def build_combined_event_report(
+    overlap_matches_df: pd.DataFrame,
+    peak_photo_summary_df: pd.DataFrame,
+) -> pd.DataFrame:
+    matched_image_events = overlap_matches_df[overlap_matches_df["match_status"] == "matched"].copy()
+    matched_image_events = matched_image_events[
+        [
+            "Corrected_Datetime",
+            "Elapsed_sec",
+            "CH4_ppm",
+            "image_id",
+            "image_file",
+            "image_datetime",
+            "image_timestamp_source",
+            "image_path",
+            "delta_seconds",
+        ]
+    ].rename(
+        columns={
+            "Elapsed_sec": "matched_elapsed_sec",
+            "CH4_ppm": "matched_ch4_ppm",
+            "image_id": "matched_image_id",
+            "image_file": "matched_image_file",
+            "image_datetime": "matched_image_datetime",
+            "image_timestamp_source": "matched_image_timestamp_source",
+            "image_path": "matched_image_path",
+            "delta_seconds": "matched_image_delta_seconds",
+        }
+    )
+
+    peak_events = peak_photo_summary_df[
+        [
+            "Corrected_Datetime",
+            "Elapsed_sec",
+            "CH4_ppm",
+            "peak_rank_by_ch4",
+            "peak_prominence_ppm",
+            "peak_height_ppm",
+            "peak_over_100ppm",
+            "nearest_image_id",
+            "nearest_image_file",
+            "nearest_image_datetime",
+            "nearest_image_timestamp_source",
+            "nearest_image_path",
+            "nearest_image_delta_seconds",
+            "nearest_image_abs_delta_seconds",
+            "nearest_image_relation",
+        ]
+    ].rename(
+        columns={
+            "Elapsed_sec": "peak_elapsed_sec",
+            "CH4_ppm": "peak_ch4_ppm",
+        }
+    )
+
+    combined = pd.merge(
+        matched_image_events,
+        peak_events,
+        on="Corrected_Datetime",
+        how="outer",
+    )
+    combined["event_elapsed_sec"] = combined["matched_elapsed_sec"].combine_first(combined["peak_elapsed_sec"])
+    combined["event_ch4_ppm"] = combined["matched_ch4_ppm"].combine_first(combined["peak_ch4_ppm"])
+    combined["has_exact_image_match"] = combined["matched_image_file"].notna()
+    combined["is_detected_peak"] = combined["peak_rank_by_ch4"].notna()
+    combined["report_row_type"] = "unclassified"
+    combined.loc[
+        combined["has_exact_image_match"] & combined["is_detected_peak"],
+        "report_row_type",
+    ] = "matched_image_and_peak"
+    combined.loc[
+        combined["has_exact_image_match"] & ~combined["is_detected_peak"],
+        "report_row_type",
+    ] = "matched_image_only"
+    combined.loc[
+        ~combined["has_exact_image_match"] & combined["is_detected_peak"],
+        "report_row_type",
+    ] = "peak_only"
+
+    combined["best_image_file"] = combined["matched_image_file"].combine_first(combined["nearest_image_file"])
+    combined["best_image_datetime"] = combined["matched_image_datetime"].combine_first(
+        combined["nearest_image_datetime"]
+    )
+    combined["best_image_path"] = combined["matched_image_path"].combine_first(combined["nearest_image_path"])
+    combined["best_image_delta_seconds"] = combined["matched_image_delta_seconds"].where(
+        combined["matched_image_file"].notna(),
+        combined["nearest_image_delta_seconds"],
+    )
+    combined["best_image_link_type"] = "no_image"
+    combined.loc[combined["matched_image_file"].notna(), "best_image_link_type"] = "exact_image_match"
+    combined.loc[
+        combined["matched_image_file"].isna() & combined["nearest_image_file"].notna(),
+        "best_image_link_type",
+    ] = "nearest_peak_image"
+
+    combined = combined.sort_values(
+        ["Corrected_Datetime", "peak_rank_by_ch4", "matched_image_file"],
+        na_position="last",
+    ).reset_index(drop=True)
+    return combined
+
+
 def build_summary(
     gas_df: pd.DataFrame,
     images_df: pd.DataFrame,
     all_matches_df: pd.DataFrame,
     overlap_matches_df: pd.DataFrame,
     peak_photo_summary_df: pd.DataFrame,
+    combined_event_report_df: pd.DataFrame,
     duplicate_image_times_df: pd.DataFrame,
     unparsed_images_df: pd.DataFrame,
     offset_seconds: int = TIMESTAMP_OFFSET_SECONDS,
@@ -372,6 +475,7 @@ def build_summary(
         "images_outside_corrected_window": int((~all_matches_df["within_corrected_data_window"]).sum()),
         "detected_peaks": int(len(peak_photo_summary_df)),
         "peaks_over_100ppm": int(peak_photo_summary_df["peak_over_100ppm"].sum()),
+        "combined_report_rows": int(len(combined_event_report_df)),
         "duplicate_image_timestamps": int(len(duplicate_image_times_df)),
         "unparsed_images": int(len(unparsed_images_df)),
     }
@@ -382,6 +486,7 @@ def write_outputs(
     all_matches_df: pd.DataFrame,
     overlap_matches_df: pd.DataFrame,
     peak_photo_summary_df: pd.DataFrame,
+    combined_event_report_df: pd.DataFrame,
     duplicate_image_times_df: pd.DataFrame,
     unparsed_images_df: pd.DataFrame,
     output_prefix: str,
@@ -394,6 +499,7 @@ def write_outputs(
         "all_matches_csv": output_dir / f"{output_prefix}_all_image_matches.csv",
         "overlap_matches_csv": output_dir / f"{output_prefix}_overlap_image_matches.csv",
         "peak_photo_summary_csv": output_dir / f"{output_prefix}_peak_photo_summary.csv",
+        "combined_event_report_csv": output_dir / f"{output_prefix}_combined_event_report.csv",
         "duplicate_image_timestamps_csv": output_dir / f"{output_prefix}_duplicate_image_timestamps.csv",
         "unparsed_images_csv": output_dir / f"{output_prefix}_unparsed_images.csv",
     }
@@ -401,6 +507,7 @@ def write_outputs(
     all_matches_df.to_csv(output_paths["all_matches_csv"], index=False)
     overlap_matches_df.to_csv(output_paths["overlap_matches_csv"], index=False)
     peak_photo_summary_df.to_csv(output_paths["peak_photo_summary_csv"], index=False)
+    combined_event_report_df.to_csv(output_paths["combined_event_report_csv"], index=False)
     duplicate_image_times_df.to_csv(output_paths["duplicate_image_timestamps_csv"], index=False)
     unparsed_images_df.to_csv(output_paths["unparsed_images_csv"], index=False)
 
@@ -423,6 +530,7 @@ def run_matching_workflow(
     all_matches_df = build_image_match_table(gas_df, images_df, tolerance_seconds=tolerance_seconds)
     overlap_matches_df = all_matches_df[all_matches_df["within_corrected_data_window"]].copy()
     peak_photo_summary_df = build_peak_photo_summary(gas_df, images_df)
+    combined_event_report_df = build_combined_event_report(overlap_matches_df, peak_photo_summary_df)
 
     summary = build_summary(
         gas_df=gas_df,
@@ -430,6 +538,7 @@ def run_matching_workflow(
         all_matches_df=all_matches_df,
         overlap_matches_df=overlap_matches_df,
         peak_photo_summary_df=peak_photo_summary_df,
+        combined_event_report_df=combined_event_report_df,
         duplicate_image_times_df=duplicate_image_times_df,
         unparsed_images_df=unparsed_images_df,
         offset_seconds=offset_seconds,
@@ -442,6 +551,7 @@ def run_matching_workflow(
             all_matches_df=all_matches_df,
             overlap_matches_df=overlap_matches_df,
             peak_photo_summary_df=peak_photo_summary_df,
+            combined_event_report_df=combined_event_report_df,
             duplicate_image_times_df=duplicate_image_times_df,
             unparsed_images_df=unparsed_images_df,
             output_prefix=output_prefix or csv_path.stem,
@@ -453,6 +563,7 @@ def run_matching_workflow(
         "all_matches_df": all_matches_df,
         "overlap_matches_df": overlap_matches_df,
         "peak_photo_summary_df": peak_photo_summary_df,
+        "combined_event_report_df": combined_event_report_df,
         "duplicate_image_times_df": duplicate_image_times_df,
         "unparsed_images_df": unparsed_images_df,
         "summary": summary,

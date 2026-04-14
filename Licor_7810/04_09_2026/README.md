@@ -16,11 +16,13 @@ For reusable runs across other wells and dates, use the repo-root CLI in [README
 ## Main Files
 
 - `well16_image_matching.py`: reusable matching logic
+- `../../methane_image_matching.py`: repo-level reusable CLI for other wells and dates
 - `requirements.txt`: Python packages used by the workflow
 - `Excel/graph.ipynb`: plotting notebook
 - `outputs/well16_all_image_matches.csv`: all parsed images with match status
 - `outputs/well16_overlap_image_matches.csv`: images inside the corrected methane time window
 - `outputs/well16_peak_photo_summary.csv`: detected methane peaks with the nearest field image
+- `outputs/well16_combined_event_report.csv`: one table that combines event rows, peak flags, and the best linked image
 
 ## Notes
 
