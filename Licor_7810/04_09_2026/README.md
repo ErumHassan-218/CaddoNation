@@ -16,6 +16,7 @@ For reusable runs across other wells and dates, use the repo-root CLI in [README
 ## Main Files
 
 - `well16_image_matching.py`: reusable matching logic
+- `well16_report_figures.py`: generates report-ready methane figures for Well16
 - `../../methane_image_matching.py`: repo-level reusable CLI for other wells and dates
 - `requirements.txt`: Python packages used by the workflow
 - `Excel/graph.ipynb`: plotting notebook
@@ -23,6 +24,20 @@ For reusable runs across other wells and dates, use the repo-root CLI in [README
 - `outputs/well16_overlap_image_matches.csv`: images inside the corrected methane time window
 - `outputs/well16_peak_photo_summary.csv`: detected methane peaks with the nearest field image
 - `outputs/well16_combined_event_report.csv`: one table that combines event rows, peak flags, and the best linked image
+
+## Report Figures
+
+Run this from the `Methane_Data` repo root:
+
+```bash
+python3 Licor_7810/04_09_2026/well16_report_figures.py
+```
+
+This creates:
+
+- `outputs/report_figures/well16_report_overall_signal.png`: overall methane signal for the field visit
+- `outputs/report_figures/well16_report_section_overview.png`: four time-based sections for clearer signal review
+- `outputs/report_figures/well16_report_peak_with_photo.png`: the highest methane peak paired with the nearest field image
 
 ## Notes
 
