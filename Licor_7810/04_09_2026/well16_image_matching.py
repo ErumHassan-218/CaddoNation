@@ -1,15 +1,77 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from PIL import ExifTags, Image, UnidentifiedImageError
 
 TIMESTAMP_OFFSET_SECONDS = 76
 IMAGE_NAME_PATTERN = re.compile(
     r"^(?P<image_id>\d+)_(?P<date>\d{4}-\d{2}-\d{2})_(?P<time>\d{2}-\d{2}-\d{2})$"
 )
+EXIF_TIMESTAMP_KEYS = ("DateTimeOriginal", "DateTimeDigitized", "DateTime")
+MATCHABLE_TIMESTAMP_SOURCES = {
+    "filename_timestamp",
+    "exif_datetime_original",
+    "exif_datetime_digitized",
+    "exif_datetime",
+}
+
+
+def _to_local_timestamp(epoch_seconds: float | None) -> pd.Timestamp:
+    if epoch_seconds is None:
+        return pd.NaT
+    return pd.Timestamp(datetime.fromtimestamp(epoch_seconds)).replace(microsecond=0)
+
+
+def _parse_exif_timestamp(value: Any) -> pd.Timestamp:
+    if value in (None, ""):
+        return pd.NaT
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="ignore")
+    return pd.to_datetime(str(value).strip(), format="%Y:%m:%d %H:%M:%S", errors="coerce")
+
+
+def extract_image_metadata(path: str | Path) -> dict[str, Any]:
+    path = Path(path)
+    stat_result = path.stat()
+
+    metadata: dict[str, Any] = {
+        "filesystem_created_datetime": _to_local_timestamp(getattr(stat_result, "st_birthtime", None)),
+        "filesystem_modified_datetime": _to_local_timestamp(stat_result.st_mtime),
+        "exif_datetime_original": pd.NaT,
+        "exif_datetime_digitized": pd.NaT,
+        "exif_datetime": pd.NaT,
+        "metadata_timestamp": pd.NaT,
+        "metadata_timestamp_source": "none",
+    }
+
+    try:
+        with Image.open(path) as image:
+            exif = image.getexif()
+    except (UnidentifiedImageError, OSError):
+        exif = None
+
+    if exif:
+        exif_by_name = {ExifTags.TAGS.get(key, key): value for key, value in exif.items()}
+        metadata["exif_datetime_original"] = _parse_exif_timestamp(exif_by_name.get("DateTimeOriginal"))
+        metadata["exif_datetime_digitized"] = _parse_exif_timestamp(exif_by_name.get("DateTimeDigitized"))
+        metadata["exif_datetime"] = _parse_exif_timestamp(exif_by_name.get("DateTime"))
+
+        for field_name, source_name in (
+            ("exif_datetime_original", "exif_datetime_original"),
+            ("exif_datetime_digitized", "exif_datetime_digitized"),
+            ("exif_datetime", "exif_datetime"),
+        ):
+            if pd.notna(metadata[field_name]):
+                metadata["metadata_timestamp"] = metadata[field_name]
+                metadata["metadata_timestamp_source"] = source_name
+                break
+
+    return metadata
 
 
 def load_gas_data(csv_path: str | Path, offset_seconds: int = TIMESTAMP_OFFSET_SECONDS) -> pd.DataFrame:
@@ -50,29 +112,38 @@ def load_image_data(image_dir: str | Path) -> tuple[pd.DataFrame, pd.DataFrame]:
             continue
 
         match = IMAGE_NAME_PATTERN.match(path.stem)
-        if not match:
-            unparsed_rows.append(
-                {
-                    "image_file": path.name,
-                    "image_path": str(path.resolve()),
-                    "reason": "filename_did_not_match_expected_pattern",
-                }
+        metadata = extract_image_metadata(path)
+        image_row = {
+            "image_id": pd.NA,
+            "image_file": path.name,
+            "image_extension": path.suffix.lower(),
+            "image_datetime": pd.NaT,
+            "image_path": str(path.resolve()),
+            "image_timestamp_source": "unresolved",
+            "timestamp_confidence": "unresolved",
+            **metadata,
+        }
+
+        if match:
+            image_row["image_id"] = int(match.group("image_id"))
+            image_row["image_datetime"] = pd.to_datetime(
+                f"{match.group('date')} {match.group('time').replace('-', ':')}",
+                format="%Y-%m-%d %H:%M:%S",
             )
+            image_row["image_timestamp_source"] = "filename_timestamp"
+            image_row["timestamp_confidence"] = "high"
+            parsed_rows.append(image_row)
             continue
 
-        image_datetime = pd.to_datetime(
-            f"{match.group('date')} {match.group('time').replace('-', ':')}",
-            format="%Y-%m-%d %H:%M:%S",
-        )
-        parsed_rows.append(
-            {
-                "image_id": int(match.group("image_id")),
-                "image_file": path.name,
-                "image_extension": path.suffix.lower(),
-                "image_datetime": image_datetime,
-                "image_path": str(path.resolve()),
-            }
-        )
+        if metadata["metadata_timestamp_source"] in MATCHABLE_TIMESTAMP_SOURCES:
+            image_row["image_datetime"] = metadata["metadata_timestamp"]
+            image_row["image_timestamp_source"] = metadata["metadata_timestamp_source"]
+            image_row["timestamp_confidence"] = "medium"
+            parsed_rows.append(image_row)
+            continue
+
+        image_row["reason"] = "filename_did_not_match_expected_pattern_and_no_embedded_timestamp"
+        unparsed_rows.append(image_row)
 
     images_df = pd.DataFrame(parsed_rows).sort_values(["image_datetime", "image_file"]).reset_index(drop=True)
     unparsed_df = pd.DataFrame(unparsed_rows)
@@ -115,6 +186,15 @@ def build_image_match_table(
                 "image_extension",
                 "image_datetime",
                 "image_path",
+                "image_timestamp_source",
+                "timestamp_confidence",
+                "metadata_timestamp",
+                "metadata_timestamp_source",
+                "filesystem_created_datetime",
+                "filesystem_modified_datetime",
+                "exif_datetime_original",
+                "exif_datetime_digitized",
+                "exif_datetime",
                 "SECONDS",
                 "Elapsed_sec",
                 "Datetime",
@@ -175,6 +255,8 @@ def build_summary(
         "gas_corrected_start": gas_df["Corrected_Datetime"].min(),
         "gas_corrected_end": gas_df["Corrected_Datetime"].max(),
         "parsed_images": int(len(images_df)),
+        "filename_timestamp_images": int(images_df["image_timestamp_source"].eq("filename_timestamp").sum()),
+        "metadata_timestamp_images": int(images_df["image_timestamp_source"].ne("filename_timestamp").sum()),
         "images_in_corrected_window": int(len(overlap_matches_df)),
         "matched_images_in_corrected_window": int(len(matched_overlap)),
         "unmatched_images_in_corrected_window": int(len(unmatched_overlap)),
