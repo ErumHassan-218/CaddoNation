@@ -2,6 +2,8 @@
 
 This folder now contains a small, GitHub-friendly workflow for matching Well16 methane readings to field images by timestamp.
 
+For reusable runs across other wells and dates, use the repo-root CLI in [README.md](/Users/erumhassan/Library/CloudStorage/OneDrive-UniversityofOklahoma/Caddo%20Nation%20Field%20Survey%20-%20Documents/Methane_Data/README.md).
+
 ## What It Does
 
 - Loads `Well16.csv`
