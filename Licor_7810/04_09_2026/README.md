@@ -18,6 +18,7 @@ This folder now contains a small, GitHub-friendly workflow for matching Well16 m
 - `Excel/graph.ipynb`: plotting notebook
 - `outputs/well16_all_image_matches.csv`: all parsed images with match status
 - `outputs/well16_overlap_image_matches.csv`: images inside the corrected methane time window
+- `outputs/well16_peak_photo_summary.csv`: detected methane peaks with the nearest field image
 
 ## Notes
 

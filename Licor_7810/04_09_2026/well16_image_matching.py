@@ -7,8 +7,12 @@ from typing import Any
 
 import pandas as pd
 from PIL import ExifTags, Image, UnidentifiedImageError
+from scipy.signal import find_peaks
 
 TIMESTAMP_OFFSET_SECONDS = 76
+PEAK_MIN_HEIGHT_PPM = 2.150
+PEAK_PROMINENCE_PPM = 0.05
+PEAK_DISTANCE_POINTS = 1
 IMAGE_NAME_PATTERN = re.compile(
     r"^(?P<image_id>\d+)_(?P<date>\d{4}-\d{2}-\d{2})_(?P<time>\d{2}-\d{2}-\d{2})$"
 )
@@ -235,11 +239,109 @@ def build_image_match_table(
     return matched
 
 
+def build_peak_photo_summary(
+    gas_df: pd.DataFrame,
+    images_df: pd.DataFrame,
+    peak_min_height_ppm: float = PEAK_MIN_HEIGHT_PPM,
+    peak_prominence_ppm: float = PEAK_PROMINENCE_PPM,
+    peak_distance_points: int = PEAK_DISTANCE_POINTS,
+) -> pd.DataFrame:
+    peak_indices, peak_properties = find_peaks(
+        gas_df["CH4_ppm"].values,
+        height=peak_min_height_ppm,
+        prominence=peak_prominence_ppm,
+        distance=peak_distance_points,
+    )
+
+    peak_df = gas_df.iloc[peak_indices][
+        ["SECONDS", "Elapsed_sec", "Datetime", "Corrected_Datetime", "CH4", "CH4_ppm"]
+    ].copy()
+    if peak_df.empty:
+        return pd.DataFrame(
+            columns=[
+                "peak_rank_by_ch4",
+                "SECONDS",
+                "Elapsed_sec",
+                "Datetime",
+                "Corrected_Datetime",
+                "CH4",
+                "CH4_ppm",
+                "peak_prominence_ppm",
+                "peak_height_ppm",
+                "peak_over_100ppm",
+                "nearest_image_id",
+                "nearest_image_file",
+                "nearest_image_datetime",
+                "nearest_image_timestamp_source",
+                "nearest_image_path",
+                "nearest_image_delta_seconds",
+                "nearest_image_abs_delta_seconds",
+                "nearest_image_relation",
+            ]
+        )
+
+    peak_df["peak_prominence_ppm"] = peak_properties["prominences"]
+    peak_df["peak_height_ppm"] = peak_properties["peak_heights"]
+    peak_df["peak_over_100ppm"] = peak_df["CH4_ppm"] >= 100
+    peak_df = peak_df.sort_values("CH4_ppm", ascending=False).reset_index(drop=True)
+    peak_df["peak_rank_by_ch4"] = range(1, len(peak_df) + 1)
+
+    if images_df.empty:
+        peak_df["nearest_image_id"] = pd.NA
+        peak_df["nearest_image_file"] = pd.NA
+        peak_df["nearest_image_datetime"] = pd.NaT
+        peak_df["nearest_image_timestamp_source"] = pd.NA
+        peak_df["nearest_image_path"] = pd.NA
+        peak_df["nearest_image_delta_seconds"] = pd.NA
+        peak_df["nearest_image_abs_delta_seconds"] = pd.NA
+        peak_df["nearest_image_relation"] = pd.NA
+        return peak_df
+
+    image_lookup = (
+        images_df[
+            [
+                "image_id",
+                "image_file",
+                "image_datetime",
+                "image_timestamp_source",
+                "image_path",
+            ]
+        ]
+        .sort_values("image_datetime")
+        .rename(
+            columns={
+                "image_id": "nearest_image_id",
+                "image_file": "nearest_image_file",
+                "image_datetime": "nearest_image_datetime",
+                "image_timestamp_source": "nearest_image_timestamp_source",
+                "image_path": "nearest_image_path",
+            }
+        )
+    )
+    peak_df = peak_df.sort_values("Corrected_Datetime").reset_index(drop=True)
+    peak_df = pd.merge_asof(
+        peak_df,
+        image_lookup,
+        left_on="Corrected_Datetime",
+        right_on="nearest_image_datetime",
+        direction="nearest",
+    )
+    peak_df["nearest_image_delta_seconds"] = (
+        peak_df["nearest_image_datetime"] - peak_df["Corrected_Datetime"]
+    ).dt.total_seconds()
+    peak_df["nearest_image_abs_delta_seconds"] = peak_df["nearest_image_delta_seconds"].abs()
+    peak_df["nearest_image_relation"] = peak_df["nearest_image_delta_seconds"].map(
+        lambda delta: "exact" if delta == 0 else ("after" if delta > 0 else "before")
+    )
+    return peak_df.sort_values("peak_rank_by_ch4").reset_index(drop=True)
+
+
 def build_summary(
     gas_df: pd.DataFrame,
     images_df: pd.DataFrame,
     all_matches_df: pd.DataFrame,
     overlap_matches_df: pd.DataFrame,
+    peak_photo_summary_df: pd.DataFrame,
     duplicate_image_times_df: pd.DataFrame,
     unparsed_images_df: pd.DataFrame,
     offset_seconds: int = TIMESTAMP_OFFSET_SECONDS,
@@ -262,6 +364,8 @@ def build_summary(
         "unmatched_images_in_corrected_window": int(len(unmatched_overlap)),
         "exact_matches_in_corrected_window": int(matched_overlap["exact_timestamp_match"].sum()),
         "images_outside_corrected_window": int((~all_matches_df["within_corrected_data_window"]).sum()),
+        "detected_peaks": int(len(peak_photo_summary_df)),
+        "peaks_over_100ppm": int(peak_photo_summary_df["peak_over_100ppm"].sum()),
         "duplicate_image_timestamps": int(len(duplicate_image_times_df)),
         "unparsed_images": int(len(unparsed_images_df)),
     }
@@ -271,6 +375,7 @@ def write_outputs(
     output_dir: str | Path,
     all_matches_df: pd.DataFrame,
     overlap_matches_df: pd.DataFrame,
+    peak_photo_summary_df: pd.DataFrame,
     duplicate_image_times_df: pd.DataFrame,
     unparsed_images_df: pd.DataFrame,
 ) -> dict[str, Path]:
@@ -280,12 +385,14 @@ def write_outputs(
     output_paths = {
         "all_matches_csv": output_dir / "well16_all_image_matches.csv",
         "overlap_matches_csv": output_dir / "well16_overlap_image_matches.csv",
+        "peak_photo_summary_csv": output_dir / "well16_peak_photo_summary.csv",
         "duplicate_image_timestamps_csv": output_dir / "well16_duplicate_image_timestamps.csv",
         "unparsed_images_csv": output_dir / "well16_unparsed_images.csv",
     }
 
     all_matches_df.to_csv(output_paths["all_matches_csv"], index=False)
     overlap_matches_df.to_csv(output_paths["overlap_matches_csv"], index=False)
+    peak_photo_summary_df.to_csv(output_paths["peak_photo_summary_csv"], index=False)
     duplicate_image_times_df.to_csv(output_paths["duplicate_image_timestamps_csv"], index=False)
     unparsed_images_df.to_csv(output_paths["unparsed_images_csv"], index=False)
 
@@ -304,12 +411,14 @@ def run_matching_workflow(
     duplicate_image_times_df = find_duplicate_image_timestamps(images_df)
     all_matches_df = build_image_match_table(gas_df, images_df, tolerance_seconds=tolerance_seconds)
     overlap_matches_df = all_matches_df[all_matches_df["within_corrected_data_window"]].copy()
+    peak_photo_summary_df = build_peak_photo_summary(gas_df, images_df)
 
     summary = build_summary(
         gas_df=gas_df,
         images_df=images_df,
         all_matches_df=all_matches_df,
         overlap_matches_df=overlap_matches_df,
+        peak_photo_summary_df=peak_photo_summary_df,
         duplicate_image_times_df=duplicate_image_times_df,
         unparsed_images_df=unparsed_images_df,
         offset_seconds=offset_seconds,
@@ -321,6 +430,7 @@ def run_matching_workflow(
             output_dir=output_dir,
             all_matches_df=all_matches_df,
             overlap_matches_df=overlap_matches_df,
+            peak_photo_summary_df=peak_photo_summary_df,
             duplicate_image_times_df=duplicate_image_times_df,
             unparsed_images_df=unparsed_images_df,
         )
@@ -330,6 +440,7 @@ def run_matching_workflow(
         "images_df": images_df,
         "all_matches_df": all_matches_df,
         "overlap_matches_df": overlap_matches_df,
+        "peak_photo_summary_df": peak_photo_summary_df,
         "duplicate_image_times_df": duplicate_image_times_df,
         "unparsed_images_df": unparsed_images_df,
         "summary": summary,
